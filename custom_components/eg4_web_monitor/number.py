@@ -755,6 +755,7 @@ def _create_number_entities(
                     or coordinator.has_configured_local_transport(serial)
                 ):
                     entities.append(QuickChargeDurationNumber(coordinator, serial))
+                entities.append(ACChargeBatteryCurrentNumber(coordinator, serial))
 
                 # AC Couple Start/End SOC (GH #352): CLOUD-ONLY holdParams
                 # (_12K_HOLD_AC_COUPLE_{START,END}_SOC) with no pinned local
@@ -3827,3 +3828,65 @@ class EG4VoltageNumber(EG4BaseNumberEntity):
                 else None
             ),
         )
+
+
+# AC Charge Battery Current (SNA web UI "AC Charge Battery Current(A)").
+# Param: HOLD_AC_CHARGE_BATTERY_CURRENT.
+class ACChargeBatteryCurrentNumber(EG4BaseNumberEntity):
+    """Number entity for AC (grid) charge battery current in amps."""
+
+    def __init__(self, coordinator: EG4DataUpdateCoordinator, serial: str) -> None:
+        super().__init__(coordinator, serial)
+        self._attr_name = "AC Charge Battery Current"
+        self._attr_unique_id = (
+            f"{self._clean_model}_{serial.lower()}_ac_charge_battery_current"
+        )
+        self._attr_native_min_value = 1
+        self._attr_native_max_value = 60
+        self._attr_native_step = 1
+        self._attr_native_unit_of_measurement = "A"
+        self._attr_icon = "mdi:battery-charging-medium"
+        self._attr_native_precision = 0
+
+    def _get_related_entity_types(self) -> tuple[type, ...]:
+        return (ACChargeBatteryCurrentNumber,)
+
+    @property
+    def native_value(self) -> float | None:
+        return self._read_param_value(
+            param_key="HOLD_AC_CHARGE_BATTERY_CURRENT",
+            value_min=0,
+            value_max=250,
+            params_first=True,
+        )
+
+    async def async_set_native_value(self, value: float) -> None:
+        int_value = int(round(value))
+        if int_value < 1 or int_value > 60:
+            raise HomeAssistantError(f"AC charge current must be 1-60 A, got {int_value}")
+        _LOGGER.info("Setting AC Charge Battery Current for %s to %d A", self.serial, int_value)
+
+        async def _local_write() -> None:
+            await self.coordinator.write_named_parameter(
+                "HOLD_AC_CHARGE_BATTERY_CURRENT", int_value, serial=self.serial
+            )
+
+        async def _cloud_write() -> None:
+            client = self.coordinator.require_client()
+            result = await client.api.control.write_parameter(
+                self.serial, "HOLD_AC_CHARGE_BATTERY_CURRENT", str(int_value)
+            )
+            if not result.success:
+                raise HomeAssistantError(f"Failed to set AC charge current to {int_value} A")
+            await self.coordinator.refresh_inverter_params_if_linked(self.serial)
+
+        with optimistic_value_context(self, value):
+            await async_write_with_cloud_fallback(
+                self.coordinator,
+                self.serial,
+                f"AC charge battery current to {int_value} A",
+                local_write=_local_write,
+                cloud_write=_cloud_write,
+                local_values={"HOLD_AC_CHARGE_BATTERY_CURRENT": int_value},
+            )
+            await self._refresh_related_entities()
