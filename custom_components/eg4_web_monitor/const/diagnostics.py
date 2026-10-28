@@ -72,6 +72,7 @@ SUPPORTED_INVERTER_MODELS = frozenset(
         "12k",
         "xp",
         "lxp",
+        "sna",  # LuxPower SNA series (e.g. SNA 6K / Eco Hybrid)
     }
 )
 
